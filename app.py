@@ -55,6 +55,8 @@ def download_batch(song_df, current_index, progress=gr.Progress(track_tqdm=True)
     # --- Cookie処理 ---
     cookie_secret_name = 'YOUTUBE_COOKIES'
     cookie_content = os.getenv(cookie_secret_name)
+    if not cookie_content:
+        print("Cookieが設定されていません。")
     temp_cookie_file = None
     cookie_file_path = None
 
