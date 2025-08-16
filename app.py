@@ -86,9 +86,11 @@ def download_batch(song_df, current_index, progress=gr.Progress(track_tqdm=True)
         'outtmpl': str(batch_dir / '%(title)s.%(ext)s'),
         'noplaylist': True,
         'cookiefile': cookie_file_path,
-        'cachedir': f'/tmp/yt-dlp-cache-{session_id}', # 書き込み可能なキャッシュディレクトリ
+        'cachedir': f'/tmp/yt-dlp-cache-{session_id}',
         'quiet': True,
         'no_warnings': True,
+        'force_ipv4': True, # ネットワーク安定化のためIPv4を強制
+        'socket_timeout': 15, # 15秒でタイムアウト
     }
 
     try:
@@ -100,18 +102,31 @@ def download_batch(song_df, current_index, progress=gr.Progress(track_tqdm=True)
 
                 log += f"  > {artist_name} - {song_title} を検索・ダウンロード中..."
                 yield log, None, gr.update(interactive=False)
-
-                try:
-                    ydl.download([search_query])
-                    log += " ✔ 成功\n"
-                except yt_dlp.utils.DownloadError as e:
-                    error_message = str(e).lower()
-                    if "sign in" in error_message or "confirm your age" in error_message:
-                        log += " ❌ 失敗 (年齢確認/ログインが必要。Cookieが無効な可能性があります)\n"
-                    else:
-                        log += f" ❌ 失敗 ({type(e).__name__})\n"
-                except Exception as e:
-                    log += f" ❌ 予期せぬエラー ({type(e).__name__})\n"
+                
+                # --- リトライロジック ---
+                max_retries = 3
+                for attempt in range(max_retries):
+                    try:
+                        ydl.download([search_query])
+                        log += " ✔ 成功\n"
+                        break # 成功したらループを抜ける
+                    except yt_dlp.utils.DownloadError as e:
+                        error_message = str(e).lower()
+                        is_network_error = "resolve" in error_message or "download api page" in error_message
+                        
+                        if is_network_error and attempt < max_retries - 1:
+                            log += f" ⚠️ ネットワークエラー。再試行 ({attempt + 2}/{max_retries})...\n"
+                            time.sleep(2) # 2秒待機
+                            continue # 次の試行へ
+                        
+                        if "sign in" in error_message or "confirm your age" in error_message:
+                            log += " ❌ 失敗 (年齢確認/ログインが必要。Cookieが無効な可能性があります)\n"
+                        else:
+                            log += f" ❌ 失敗 ({type(e).__name__})\n"
+                        break # リトライ不可能なエラーか、最大回数に達した
+                    except Exception as e:
+                        log += f" ❌ 予期せぬエラー ({type(e).__name__})\n"
+                        break # 予期せぬエラーはリトライしない
                 
                 yield log, None, gr.update(interactive=False)
 
@@ -126,7 +141,6 @@ def download_batch(song_df, current_index, progress=gr.Progress(track_tqdm=True)
         mp3_files = list(batch_dir.glob('*.mp3'))
         if mp3_files:
             for file in mp3_files:
-                # ファイル名をサニタイズしてZIPに追加
                 sanitized_name = sanitize_filename(file.name)
                 zipf.write(file, sanitized_name)
         else:
@@ -134,7 +148,7 @@ def download_batch(song_df, current_index, progress=gr.Progress(track_tqdm=True)
                 f.write("このバッチではダウンロードに成功したファイルがありませんでした。")
             zipf.write(batch_dir / "no_files_downloaded.txt", "no_files_downloaded.txt")
 
-    shutil.rmtree(batch_dir) # 一時ダウンロードフォルダを削除
+    shutil.rmtree(batch_dir)
 
     new_index = end_index
     is_last_batch = new_index >= len(song_df)
