@@ -215,5 +215,10 @@ with gr.Blocks(theme=gr.themes.Soft()) as demo:
 
     cleanup_button.click(fn=delete_all_data, inputs=[], outputs=[progress_output])
 
+import os # Make sure this is at the top of your file
+
 if __name__ == "__main__":
-    demo.launch()
+    # Render provides the port number via the PORT environment variable
+    # We use 7860 as a default for running locally
+    port = int(os.getenv('PORT', 7860))
+    demo.launch(server_name="0.0.0.0", server_port=port)
