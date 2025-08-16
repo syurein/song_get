@@ -87,19 +87,44 @@ def download_batch(song_df, current_index, progress=gr.Progress(track_tqdm=True)
             search_query
         ]
 
-        try:
-            subprocess.run(command, check=True, capture_output=True, text=True, encoding='utf-8')
-            log += " ✔ 成功\n"
-        except subprocess.CalledProcessError as e:
-            log += f" ❌ 失敗\n    エラー: {e.stderr.strip()}\n"
+        # --- リトライロジックの追加 ---
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                subprocess.run(command, check=True, capture_output=True, text=True, encoding='utf-8')
+                log += " ✔ 成功\n"
+                break  # 成功したらリトライを終了
+            except subprocess.CalledProcessError as e:
+                # ネットワークエラーかどうかを判定
+                is_network_error = "resolve" in e.stderr or "download API page" in e.stderr
+                if is_network_error and attempt < max_retries - 1:
+                    log += f" ⚠️ ネットワークエラー。2秒後に再試行します... ({attempt + 1}/{max_retries})\n"
+                    yield log, None, gr.update(interactive=False)
+                    time.sleep(2) # 2秒待機
+                    # 次の試行のためにログを更新
+                    log += f"  > {safe_song_title} を再試行中..."
+                    yield log, None, gr.update(interactive=False)
+                else:
+                    # 最後のリトライでも失敗した場合、またはネットワーク以外のエラーの場合
+                    log += f" ❌ 失敗\n    エラー: {e.stderr.strip()}\n"
+                    break # リトライを終了
         
         yield log, None, gr.update(interactive=False)
 
     # ZIPファイルを作成
     zip_path = f"/tmp/music_batch_{start_index//20 + 1}.zip"
     with zipfile.ZipFile(zip_path, 'w') as zipf:
-        for file in batch_dir.glob('*.mp3'):
-            zipf.write(file, file.name)
+        # ダウンロードされたファイルのみをZIPに追加
+        mp3_files = list(batch_dir.glob('*.mp3'))
+        if mp3_files:
+            for file in mp3_files:
+                zipf.write(file, file.name)
+        else:
+            # 成功したファイルがない場合、空のテキストファイルを追加してZIPエラーを防ぐ
+            with open(batch_dir / "no_files_downloaded.txt", "w") as f:
+                f.write("このバッチではダウンロードに成功したファイルがありませんでした。")
+            zipf.write(batch_dir / "no_files_downloaded.txt", "no_files_downloaded.txt")
+
     
     # 一時ファイルをクリーンアップ
     shutil.rmtree(batch_dir)
